@@ -1,0 +1,94 @@
+/****************************
+ 5章 Rでのデータ分析（応用） Stata版
+****************************/
+// 作業ディレクトリ（CSVデータを保存したフォルダのパス）を指定
+cd "C:\***************\Data_Setvfin\Data_Set"
+
+/// データの読み込み
+// 財務データ（日本語が文字化けしないように文字コード（UTF-8）を指定して読み込む）
+import delimited ch04_financial_data.csv, clear encoding(UTF-8)
+
+/// 読み込んだデータの確認
+// データ型などの確認
+describe
+// 欠損値やunique valueの数、カテゴリなどの確認
+codebook
+// データ全体の一覧表示
+br
+// dta形式で保存（stataは一度に一つのデータセットしかメモリに保持できないため）
+save ch04_financial_data, replace
+
+// 株価データ
+import delimited ch05_stock_data.csv, clear encoding(UTF-8)
+/// 読み込んだデータの確認
+// データ型などの確認
+describe
+// 欠損値やunique valueの数、カテゴリなどの確認
+codebook
+// データ全体の一覧表示
+br
+// dta形式で保存
+save ch05_stock_data, replace
+
+/// データの結合
+// 財務データを開く
+use ch04_financial_data, clear
+// 結合用のキーに重複があるかを確認（surplusが0でない場合、重複がある）
+duplicates report stock_code year
+
+// 株価データを開く
+use ch05_stock_data, clear
+// 結合用のキーに重複があるかを確認（surplusが0でない場合、重複がある）
+duplicates report stock_code year 
+
+/// 複合キー（stock_code と year）で結合（複合キーの重複がないため、1:1で結合できる）
+// 財務データをマスタ（親）データとし、親データに株価データを結合する
+use ch04_financial_data, clear
+merge 1:1 stock_code year using ch05_stock_data, update
+/*
+【補足】
+マスタデータと株価データが結合キー以外に同じ名前の変数（firm_name）を含む場合、
+デフォルトではマスタデータの値だけが保持され、name.xとname.yのように二つの列が生成されることはない。
+マスタデータ（財務データ）に欠損値がある場合だけ、結合する株価データから補いたい場合、オプションの「update」をつける。
+今回の場合、updateオプションをつけてもつけなくても、結合結果は変わらない。
+*/
+
+// 必要な列だけを選択
+keep firm_id year firm_name stock_code industry_name stock_market accounting_standard dividend shares_outstanding sales earnings equity total_assets stock_price
+// 結果の表示
+br 
+
+// EPS（1株あたり当期純利益）とBPS（1株あたり純資産）を計算して列を追加
+gen eps = earnings / shares_outstanding
+gen bps = equity / shares_outstanding
+
+// 必要ならCSVに保存
+export delimited ch05_clean_data.csv, replace
+
+// epsと株価の相関係数の計算
+correlate eps stock_price
+
+// 選択した変数の相関係数表の作成
+correlate eps bps stock_price sales earnings
+
+// 単回帰分析の実行
+reg stock_price eps
+
+// 重回帰分析の実行
+reg stock_price eps bps
+
+// VIFの計算
+vif
+
+// TRUEまたはFALSEを1または0に変換
+gen dividend_binary=(dividend=="TRUE")
+/* 条件式を括弧でくくると、条件に当てはまる場合1、そうでない場合0を返す） */
+// 正しく変換できたことを確認
+tab dividend dividend_binary
+
+// ロジスティック回帰モデル（対数オッズ）
+logit dividend_binary earnings
+// Rと同様のGLM形式で表記したい場合
+glm dividend_binary earnings, family(binomial) link(logit)
+// オッズ比を計算したい場合
+logistic dividend_binary earnings

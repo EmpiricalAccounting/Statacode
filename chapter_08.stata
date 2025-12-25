@@ -1,0 +1,224 @@
+/********************************************
+ 第8章 株価と利益情報を用いたイベントスタディ Stata版
+*********************************************/
+// 作業ディレクトリ（CSVデータを保存したフォルダのパス）を指定
+cd "C:\***************\Data_Setvfin\Data_Set"
+
+/***********************************************
+1. earnings_dataの加工
+************************************************/
+// 利益と決算発表日データの読み込み
+import delimited ch08_earnings_data.csv, clear
+br
+/// 増益企業と減益企業の判定
+// パネル構造の宣言
+xtset firm_id year
+gen diff_earnings = earnings - L.earnings
+gen earnings_change = (diff_earnings > 0)
+/*******************************************************
+ 条件式を使ってダミー変数をつくるときの挙動がRと違うので注意。
+ Rではdiff_earningsが欠損値（year==2013）のとき、
+ earnings_changeも欠損値になる。
+ stataでは、欠損値は「無限大」扱いなので、
+ diff_earningsが欠損値のときに「diff_earnings > 0」という条件でダミー変数をつくると
+ earnings_changeの値は1になる。
+ *******************************************************/
+br if diff_earnings ==. 
+//　diff_earningsが欠損している観測値を削除する
+drop if diff_earnings ==. 
+// 増益と減益の数の確認
+tab earnings_change, m
+
+rename announce_date announce_date_s
+// date関数を使い、日付形式の新しい変数をつくる
+gen announce_date = date(announce_date_s,"YMD")
+// 日付表示にする
+format announce_date %td
+drop announce_date_s
+
+// 加工後のデータを保存
+save ch08_earnings_data, replace
+
+/***********************************************
+2. stock_dataの加工
+************************************************/
+// 株価データの読み込み
+import delimited ch08_stock_data.csv, clear
+br
+rename date date_s
+// date関数を使い、日付形式の新しい変数をつくる
+gen date = date(date_s,"YMD")
+// 日付表示にする
+format date %td
+drop date_s
+// 加工後のデータを保存
+save ch08_stock_data, replace
+
+
+/***********************************************
+3. イベント（決算発表日）のリストをつくる
+stataでは、Rのjoin_byを再現を使った結合を再現することができないので、
+異なる方法でデータセットを結合して、相対日数をつくっていく
+************************************************/
+use ch08_earnings_data, clear
+keep firm_id year announce_date
+// 多対多結合（stataでは非推奨）を避けるため、ロング（firm_idが複数行）からワイド形式（firm_idが一行）にデータを変換
+reshape wide announce_date, i(firm_id) j(year)
+// 加工後のデータを保存
+save ch08_event_data, replace
+
+/************************************************
+4. index_dataの加工
+************************************************/
+// インデックスデータの読み込み
+import delimited ch08_index_data.csv, clear
+br
+rename date date_s
+// date関数を使い、日付形式の新しい変数をつくる
+gen date = date(date_s,"YMD")
+// 日付表示にする
+format date %td
+drop date_s
+save ch08_index_data, replace
+
+/***********************************************
+5. stock_dataとindex_dataの結合
+************************************************/
+// stock_dataを開く
+use ch08_stock_data, clear
+// dateを使ってindex_dataを結合する（多対1）
+merge m:1 date using ch08_index_data
+// merge結果のフラグを消す
+drop _merge
+// firm_id dateの時系列パネル構造を宣言
+xtset firm_id date
+
+/***********************************************
+6. event_dataの結合
+************************************************/
+// 決算発表日データを結合する
+merge m:1 firm_id using ch08_event_data
+drop _merge
+
+// 2014年度決算から2023年度決算まで各年度分以下の処理を繰り返す
+foreach x of numlist 2014/2023{
+	// firm_id昇順、date昇順にソート
+	sort firm_id date
+	// dateとannounce_dateが一致した日が0になる相対日数の列をつくる
+	gen relative_date`x' = 0 if date == announce_date`x'
+	// 相対日数の正の値をつくる（1行前の値に1を足す。ただし、firm_idが一致しない行ではこの操作をしない）
+	bysort firm_id: replace relative_date`x' = relative_date`x'[_n-1] + 1 if relative_date`x' == .
+	// firm_id昇順、date降順にソート
+	gsort firm_id -date
+	// 相対日数の負の値をつくる（1行前の値から1を引く。ただし、firm_idが一致しない行ではこの操作をしない）
+	bysort firm_id: replace relative_date`x' = relative_date`x'[_n-1] - 1 if relative_date`x' == .
+	}
+
+// firm_id昇順、date昇順にソート
+sort firm_id date
+
+// 決算発表日から240日前から120日後のデータ以外は、相対日数を欠損値にする
+foreach x of numlist 2014/2023{
+	replace relative_date`x' = . if (relative_date`x' < -240)|(relative_date`x' > 120)
+	}
+// イベントウィンドウ（決算発表日から240日前から120日後）に入らないデータを削除する
+drop if relative_date2014 == . & relative_date2015 == . & relative_date2016 == . ///
+& relative_date2017 == . & relative_date2018 == . & relative_date2019 == . & relative_date2020 == . ///
+& relative_date2021 == . & relative_date2022 == . & relative_date2023 == .
+// 同じdateに相対日数が空欄でない年度がいくつあるか数える
+egen event_n = rownonmiss(relative_date2014 relative_date2015 relative_date2016 relative_date2017 relative_date2018 relative_date2019 relative_date2020 relative_date2021 relative_date2022 relative_date2023)
+// 同じdateが複数のイベントウィンドウに含まれることがどれくらいあるか確認
+tab event_n, m
+// 一度データを保存
+save ch08_relative_data, replace
+
+// データを年度ごとに一度ばらして保存する
+foreach x of numlist 2014/2023{
+	use ch08_relative_data, clear
+	keep if relative_date`x' != .
+	keep firm_id stock_code stock_price date index announce_date`x' relative_date`x'
+	rename announce_date`x' announce_date
+	rename relative_date`x' relative_date
+	gen year = `x'
+	save ch08_relative_data`x', replace
+	}
+
+// 一度メモリのデータをリセット
+clear	
+// ばらしたデータを全部縦に結合する
+append using ch08_relative_data2014 ch08_relative_data2015 ch08_relative_data2016 ///
+ch08_relative_data2017 ch08_relative_data2018 ch08_relative_data2019 ///
+ch08_relative_data2020 ch08_relative_data2021 ch08_relative_data2022 ch08_relative_data2023
+
+/***********************************************
+7. earnings_dataの結合
+************************************************/
+// firm_id year date昇順でソート
+sort firm_id year date
+// firm_id yearを使ってearnings_dataを結合
+merge m:1 firm_id year using ch08_earnings_data
+drop _merge
+// 変数を見やすい順番に並べ替える
+order firm_id year date announce_date relative_date, first
+
+/***********************************************
+8. 分析
+************************************************/
+// firm_idが1、yearが2023のデータを確認
+br announce_date relative_date date earnings_change stock_price index if firm_id == 1 & year == 2023
+
+sort firm_id year date
+
+/// 株式リターンの計算
+/* dateが一意ではない（同じdateで異なるyearのデータがある）ため、
+xtsetを指定してラグ関数を使うことができない。
+そのため、ラグを手動で作成する */
+// 1行前のstock priceの値をラグに転記する。ただし、yearが異なるとき（各年度最初のサンプル）は転記せず欠損値となるようにする。
+gen stock_price_lag = stock_price[_n-1] if year == year[_n-1]
+gen index_lag = index[_n-1] if year == year[_n-1]
+
+gen return = (stock_price - stock_price_lag) / stock_price_lag
+gen index_return = (index - index_lag) / index_lag
+// returnとindex_returnが欠損値のときは0に書き換え
+replace return = 0 if return == .
+replace index_return = 0 if index_return ==.
+
+// firm_idが1、yearが2023、relative_dateが0のデータについて、株式リターンとインデックスリターンの確認
+br return index_return if firm_id == 1 & year == 2023 & relative_date == 0
+
+// 異常リターン（AR）の計算
+gen ar = return - index_return
+
+// firm_idが1、yearが2023、relative_dateが0のデータについて、ARの確認
+br ar if firm_id == 1 & year == 2023 & relative_date == 0
+
+// 決算発表日でのARの平均値の計算
+bysort earnings_change: egen mean_ar = mean(ar) if relative_date == 0
+tab mean_ar earnings_change
+
+// firm_id yearごとの累積異常リターン（CAR）の計算
+sort firm_id year date
+bysort firm_id year: gen car = sum(ar)
+
+// firm_idが1、yearが2023、relative_dateが0のデータについて、CARの確認
+br year relative_date return index_return ar car if firm_id == 1 & year == 2023 & relative_date == 0
+
+// 増益減益それぞれでのCARの相対日数ごとの平均値
+sort earnings_change relative_date
+bysort earnings_change relative_date: egen mean_car = mean(car) 
+
+// 決算発表日でのCARの平均値の確認
+tab mean_car earnings_change if relative_date == 0, m
+
+/// CARのグラフの作成
+// 増益（Good）と減益（Bad）のラベルを定義
+label define earnings 0 "Bad" 1 "Good"
+// ラベルを変数に付与
+label values earnings_change earnings
+
+// earnings_changeの値ごとに二つの折れ線グラフを描いて一つにまとめて表示させる
+twoway line mean_car relative_date if earnings_change == 0, lcolor(black) lpattern(shortdash) ///
+|| line mean_car relative_date if earnings_change == 1, lcolor(black) ///
+xsize(8) ysize(4) xline(0, lcolor(gray) lpattern(dash)) yline(0, lcolor(gray) lpattern(dash)) ///
+title("Market Reaction Analysis", position(11)) xtitle("Relative Date") ytitle("CAR") ///
+legend(col(1) position(3) title("Earnings Change") label(1 "Bad") label(2 "Good"))

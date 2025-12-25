@@ -1,0 +1,71 @@
+/****************************
+ 4章 Rでのデータ分析（基礎） Stata版
+ ****************************/
+// リセット
+clear 
+
+// 四則演算
+display 1 + 1
+display 5 - 2
+display 2 * 3
+display 8 / 2
+
+// 作業ディレクトリ（CSVデータを保存したフォルダのパス）を指定
+cd "C:\***************\Data_Setvfin\Data_Set"
+
+// データの読み込み
+import delimited ch04_financial_data.csv, clear
+
+/// 読み込んだデータの確認
+// データ型などの確認
+describe
+// 欠損値やunique valueの数、カテゴリなどの確認
+codebook
+// データ全体の一覧表示
+br
+
+/// 因子型への変更
+// オリジナルの変数の名前を変更しておく
+rename firm_name firm_name_s
+// encodeコマンドで、新しく変数を作り直す
+encode firm_name_s, gen(firm_name)
+// 変更前と変更後の変数を並べて表示
+br firm_name_s firm_name
+
+// 他の変数について、まとめて変更する（ここでは、リストした変数にループ処理を行う）
+foreach x of varlist stock_code industry_name stock_market accounting_standard dividend{
+	rename `x' `x'_s
+	// encodeコマンドで、新しく変数を作り直す
+	encode `x'_s, gen(`x')
+	}
+// 新しく作成した変数を元の変数と同じ位置に移動し、古い変数を削除する
+order firm_name stock_code industry_name stock_market accounting_standard dividend, after(year)
+// 元の変数（末尾が「_s」で終わる変数を削除する
+drop *_s
+// 変更後のデータを一覧表示
+br
+
+/// 記述統計
+// 因子型変数の度数分布
+tab firm_id, m
+tab year, m
+tab firm_name, m
+tab stock_code, m 
+tab industry_name, m 
+tab stock_market, m 
+tab accounting_standard, m
+tab dividend, m
+
+// 連続変数の簡潔な要約統計量
+sum shares_outstanding sales earnings equity total_assets
+// 連続変数の詳細な要約統計量
+sum shares_outstanding sales earnings equity total_assets, detail
+
+// ROEの三分解を計算して，結果をfinancial_dataに追加する
+gen roe = earnings / equity
+gen profit_margin = earnings / sales
+gen asset_turnover = sales / total_assets
+gen financial_leverage = total_assets / equity
+
+// ROEの三分解の計算結果を表示
+br firm_name year roe profit_margin asset_turnover financial_leverage
